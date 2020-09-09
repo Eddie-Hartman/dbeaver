@@ -60,6 +60,7 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
     private boolean assemblyType;
     private boolean tableType;
     private String collationName;
+    private int tableTypeId = 0;
 
     private boolean persisted;
 
@@ -80,6 +81,8 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
         this.tableType = JDBCUtils.safeGetInt(dbResult, "is_table_type") != 0;
 
         this.collationName = JDBCUtils.safeGetString(dbResult, "collation_name");
+
+        this.tableTypeId = JDBCUtils.safeGetInt(dbResult, "type_table_object_id");
 
         if (userType) {
             SQLServerDataType systemDataType = getSystemDataType();
@@ -127,6 +130,10 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
         return owner instanceof SQLServerDatabase ? ((SQLServerDatabase) owner).getSchema(monitor, schemaId) : null;
     }
 
+    public SQLServerSchema getSysSchema(DBRProgressMonitor monitor) throws DBException {
+        return owner instanceof SQLServerDatabase ? ((SQLServerDatabase) owner).getSchema(monitor, 4) : null;
+    }
+
     public SQLServerDataType getSystemDataType() {
         if (userType) {
             return getDataSource().getSystemDataType(systemTypeId);
@@ -139,8 +146,9 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
     public String getObjectDefinitionText(DBRProgressMonitor monitor, Map<String, Object> options) throws DBCException {
         StringBuilder sql = new StringBuilder();
         sql.append("-- DROP TYPE ").append(getFullyQualifiedName(DBPEvaluationContext.DDL)).append(";\n\n"); //$NON-NLS-1$ //$NON-NLS-2$
+        sql.append("CREATE TYPE ").append(getFullyQualifiedName(DBPEvaluationContext.DDL));
         if (!tableType) {
-            sql.append("CREATE TYPE ").append(getFullyQualifiedName(DBPEvaluationContext.DDL)).append("\n").append("FROM ");
+            sql.append("\n").append("FROM ");
             SQLServerDataType systemDataType = getSystemDataType();
             String typeName = systemDataType.getName();
             sql.append(typeName.toUpperCase(Locale.ENGLISH));
@@ -153,6 +161,15 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
                 sql.append(" NOT NULL;");
             }
         } else {
+            sql.append(" AS TABLE");
+            try {
+                SQLServerTableType tableType = getSysSchema(monitor).getTableType(monitor, tableTypeId);
+                if (tableType != null) {
+                    String objectDefinitionText = tableType.getObjectDefinitionText(monitor, options);
+                }
+            } catch (DBException e) {
+                log.debug("Schema not found. ", e);
+            }
             sql.append("-- Table types DDL not yet available");
         }
         return sql.toString();
@@ -248,6 +265,10 @@ public class SQLServerDataType implements DBSDataType, SQLServerObject, DBPQuali
     @Property(viewable = true, editable = true, valueTransformer = DBObjectNameCaseTransformer.class, order = 1)
     public String getName() {
         return name;
+    }
+
+    public int getTableTypeId() {
+        return tableTypeId;
     }
 
     @Nullable

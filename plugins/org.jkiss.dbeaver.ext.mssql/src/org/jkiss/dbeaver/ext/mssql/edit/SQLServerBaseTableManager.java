@@ -16,6 +16,7 @@
  */
 package org.jkiss.dbeaver.ext.mssql.edit;
 
+import org.jkiss.dbeaver.DBException;
 import org.jkiss.dbeaver.ext.mssql.SQLServerUtils;
 import org.jkiss.dbeaver.ext.mssql.model.SQLServerObjectClass;
 import org.jkiss.dbeaver.ext.mssql.model.SQLServerSchema;
@@ -79,4 +80,8 @@ public abstract class SQLServerBaseTableManager<OBJECT extends SQLServerTableBas
     }
 
 
+    @Override
+    protected String beginCreateTableStatement(DBRProgressMonitor monitor, OBJECT table, String tableName) throws DBException {
+        return super.beginCreateTableStatement(monitor, table, tableName);
+    }
 }

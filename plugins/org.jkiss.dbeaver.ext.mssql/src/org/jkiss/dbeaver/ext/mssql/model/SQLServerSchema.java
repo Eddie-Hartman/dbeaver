@@ -22,7 +22,9 @@ import org.jkiss.dbeaver.DBException;
 import org.jkiss.dbeaver.Log;
 import org.jkiss.dbeaver.ext.mssql.SQLServerConstants;
 import org.jkiss.dbeaver.ext.mssql.SQLServerUtils;
+import org.jkiss.dbeaver.ext.mssql.edit.SQLServerTableColumnManager;
 import org.jkiss.dbeaver.model.*;
+import org.jkiss.dbeaver.model.edit.DBEPersistAction;
 import org.jkiss.dbeaver.model.exec.DBCException;
 import org.jkiss.dbeaver.model.exec.jdbc.JDBCPreparedStatement;
 import org.jkiss.dbeaver.model.exec.jdbc.JDBCResultSet;
@@ -33,6 +35,7 @@ import org.jkiss.dbeaver.model.impl.jdbc.cache.JDBCCompositeCache;
 import org.jkiss.dbeaver.model.impl.jdbc.cache.JDBCObjectCache;
 import org.jkiss.dbeaver.model.impl.jdbc.cache.JDBCObjectLookupCache;
 import org.jkiss.dbeaver.model.impl.jdbc.cache.JDBCStructLookupCache;
+import org.jkiss.dbeaver.model.impl.sql.edit.SQLObjectEditor;
 import org.jkiss.dbeaver.model.meta.Association;
 import org.jkiss.dbeaver.model.meta.Property;
 import org.jkiss.dbeaver.model.runtime.DBRProgressMonitor;
@@ -229,6 +232,21 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
         return tableCache.getTypedObjects(monitor, this, SQLServerView.class);
     }
 
+    @Association
+    public Collection<SQLServerTableType> getTablesType(DBRProgressMonitor monitor) throws DBException {
+        return tableCache.getTypedObjects(monitor, this, SQLServerTableType.class);
+    }
+
+    public SQLServerTableType getTableType(DBRProgressMonitor monitor, long tableId) throws DBException {
+        for (SQLServerTableBase table : tableCache.getAllObjects(monitor, this)) {
+            if (table.getObjectId() == tableId && table instanceof SQLServerTableType) {
+                return (SQLServerTableType) table;
+            }
+        }
+        log.debug("Table type '" + tableId + "' not found in schema " + getName());
+        return null;
+    }
+
     @Override
     public List<SQLServerObject> getChildren(@NotNull DBRProgressMonitor monitor) throws DBException {
         List<SQLServerObject> result = new ArrayList<>();
@@ -348,7 +366,7 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
             SQLServerDataSource dataSource = owner.getDataSource();
             sql.append("SELECT o.*,ep.value as description FROM ").append(SQLServerUtils.getSystemTableName(owner.getDatabase(), "all_objects")).append(" o");
             sql.append("\nLEFT OUTER JOIN ").append(SQLServerUtils.getExtendedPropsTableName(owner.getDatabase())).append(" ep ON ep.class=").append(SQLServerObjectClass.OBJECT_OR_COLUMN.getClassId()).append(" AND ep.major_id=o.object_id AND ep.minor_id=0 AND ep.name='").append(SQLServerConstants.PROP_MS_DESCRIPTION).append("'");
-            sql.append("\nWHERE o.type IN ('U','S','V') AND o.schema_id = ").append(owner.getObjectId());
+            sql.append("\nWHERE o.type IN ('U','S','V','TT') AND o.schema_id = ").append(owner.getObjectId());
             if (object != null || objectName != null) {
                 sql.append(" AND o.name = ").append(SQLUtils.quoteString(session.getDataSource(), object != null ? object.getName() : objectName));
             } else {
@@ -381,6 +399,8 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
             String type = JDBCUtils.safeGetStringTrimmed(dbResult, "type");
             if (SQLServerObjectType.U.name().equals(type) || SQLServerObjectType.S.name().equals(type)) {
                 return new SQLServerTable(owner, dbResult);
+            } else if (SQLServerObjectType.TT.name().equals(type)) {
+                    return new SQLServerTableType(owner, dbResult);
             } else {
                 return new SQLServerView(owner, dbResult);
             }
@@ -526,20 +546,20 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
     /**
      * Constraint cache implementation
      */
-    static class UniqueConstraintCache extends JDBCCompositeCache<SQLServerSchema, SQLServerTable, SQLServerTableUniqueKey, SQLServerTableIndexColumn> {
+    static class UniqueConstraintCache extends JDBCCompositeCache<SQLServerSchema, SQLServerTableBase, SQLServerTableUniqueKey, SQLServerTableIndexColumn> {
 
         UniqueConstraintCache(TableCache tableCache) {
-            super(tableCache, SQLServerTable.class, "table_name", "name");
+            super(tableCache, SQLServerTableBase.class, "table_name", "name");
         }
 
         @Override
-        protected JDBCStatement prepareObjectsStatement(JDBCSession session, SQLServerSchema schema, SQLServerTable forParent) throws SQLException {
+        protected JDBCStatement prepareObjectsStatement(JDBCSession session, SQLServerSchema schema, SQLServerTableBase forParent) throws SQLException {
 
             StringBuilder sql = new StringBuilder(500);
             sql.append(
                 "SELECT kc.*,t.name as table_name FROM \n")
                 .append(SQLServerUtils.getSystemTableName(schema.getDatabase(), "key_constraints")).append(" kc,")
-                .append(SQLServerUtils.getSystemTableName(schema.getDatabase(), "tables")).append(" t\n");
+                .append(SQLServerUtils.getSystemTableName(schema.getDatabase(), "all_objects")).append(" t\n");
             sql.append("WHERE kc.parent_object_id=t.object_id AND kc.schema_id=?");
             if (forParent != null) {
                 sql.append(" AND kc.parent_object_id=?");
@@ -555,7 +575,7 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
         }
 
         @Override
-        protected SQLServerTableUniqueKey fetchObject(JDBCSession session, SQLServerSchema schema, SQLServerTable table, String childName, JDBCResultSet resultSet) throws SQLException, DBException {
+        protected SQLServerTableUniqueKey fetchObject(JDBCSession session, SQLServerSchema schema, SQLServerTableBase table, String childName, JDBCResultSet resultSet) throws SQLException, DBException {
             String name = JDBCUtils.safeGetString(resultSet, "name");
             String type = JDBCUtils.safeGetString(resultSet, "type");
             long indexId = JDBCUtils.safeGetLong(resultSet, "unique_index_id");
@@ -580,7 +600,7 @@ public class SQLServerSchema implements DBSSchema, DBPSaveableObject, DBPQualifi
         }
     }
 
-    class ForeignKeyCache extends JDBCCompositeCache<SQLServerSchema, SQLServerTable, SQLServerTableForeignKey, SQLServerTableForeignKeyColumn> {
+    class ForeignKeyCache extends JDBCCompositeCache<SQLServerSchema, SQLServerTableBase, SQLServerTableForeignKey, SQLServerTableForeignKeyColumn> {
         ForeignKeyCache()
         {
             super(tableCache, SQLServerTable.class, "table_name", "name");
